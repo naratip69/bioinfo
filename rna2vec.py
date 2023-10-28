@@ -135,7 +135,7 @@ def rnaTokenizer(rna):
     return np.array(rna_array)
 def protein_to_sentence(protiens):
     protein_array = []
-    maxlen = 1415
+    maxlen = 472
     for pt in protiens:
         pt_tran = translate(pt)
         pt_sen = proteinTokenizer(pt_tran)
@@ -150,12 +150,12 @@ def get_model():
     embedded_rna_dim, embedding_rna_weights, n_nucl_symbols = get_embed_dim('./data/rnaEmbedding25.pickle')
     protein_embed = protein2vec.wv.vectors
     # print(protein_embed[:5])
-    # print(embedding_rna_weights.shape,protein_embed.shape) #(4097,25) (253,343)
+    # print(embedding_rna_weights.shape,protein_embed.shape) #(4097,25) (248,343)
     # print(embedded_rna_dim,n_nucl_symbols) #25 4096
     rna_input = Input((496,),name='rna_input')
-    protein_input = Input((1415,),name='protein_input')
+    protein_input = Input((472,),name='protein_input')
     rnaEmbed = Embedding(input_dim=4097,output_dim=25,weights=[embedding_rna_weights],trainable=True)(rna_input)
-    proteinEmbed = Embedding(input_dim=253,output_dim=343,weights=[protein_embed],trainable=True)(protein_input)
+    proteinEmbed = Embedding(input_dim=248,output_dim=343,weights=[protein_embed],trainable=True)(protein_input)
     conv_pro = Conv1D(filters=256,use_bias=True,kernel_size=4)(proteinEmbed)
     conv_rna = Conv1D(filters=256,use_bias=True,kernel_size=4)(rnaEmbed)
     pro_pool = MaxPool1D(pool_size=225,strides=5,padding='valid')(conv_pro)
@@ -219,7 +219,7 @@ for train, test in cv.split(X,y):
     model.compile(loss='binary_crossentropy',optimizer='adam',metrics=['accuracy'])
     # print(rna_train.dtype,protein_train.dtype)
 
-    history = model.fit([rna_train,protein_train],y[train],batch_size=32,epochs=20,verbose=1)
+    history = model.fit([rna_train,protein_train],y[train],batch_size=64,epochs=20,verbose=1)
 
     model.save('models/model_fold_'+str(fold_no)+".h5")
     

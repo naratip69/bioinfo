@@ -26,7 +26,7 @@ def translate(seq):
 def proteinTokenizer(seq):
     out = []
     char2num = {'a':0,'b':1,'c':2,'d':3,'e':4,'f':5,'g':6}
-    for i in range(len(seq)):
+    for i in range(0,len(seq),3):
         if(i+2 >= len(seq) or (not ((seq[i] in char2num) and (seq[i+1] in char2num) and (seq[i+2] in char2num)))):
             out.append(343)
         else:
@@ -49,9 +49,11 @@ def protein_to_sequences():
     for key,val in fastaDict.items():
         # print(val)
         seq = translate(val)
-        sentences.append(proteinTokenizer(seq))
-        if(len(seq) > maxlen):
-            maxlen = len(seq)
+        seq_tok = proteinTokenizer(seq)
+        sentences.append(seq_tok)
+        if(len(seq_tok) > maxlen):
+            maxlen = len(seq_tok)
+    print(maxlen)
     sentences = [['0']*(maxlen - len(seq)) + seq for seq in sentences]
     return sentences
 
