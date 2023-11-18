@@ -1,4 +1,4 @@
-from Bio import SeqIO
+# from Bio import SeqIO
 import sys
 import gensim.models.keyedvectors as word2vec
 from gensim.models import Word2Vec
@@ -7,15 +7,21 @@ import numpy as np
 import pickle
 import pdb
 import tensorflow as tf
+# from tensorflow import keras
 # from dna2vec.dna2vec.multi_k_model import MultiKModel
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-from gcgc import KmerTokenizer
-from protein2vec import proteinTokenizer,translate,read_fa
+# from gcgc import KmerTokenizer
+# from protein2vec import proteinTokenizer,translate,read_fa
 from sklearn.model_selection import train_test_split,KFold
 from keras.layers import Input, Concatenate, Conv1D,MaxPool1D,Embedding,Lambda,Dense
 from keras.models import Model
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import accuracy_score,recall_score,precision_score,balanced_accuracy_score,matthews_corrcoef
+# import esm
+from transformers import T5Tokenizer, T5EncoderModel
+import torch
+import re
+import h5py
 
 def get_embed_dim(embed_file):
     with open(embed_file,'rb') as f:
@@ -133,17 +139,18 @@ def rnaTokenizer(rna):
         tri_feature = get_6_nucleotide_composition(trids,rna_seq_pad,nn_dict) 
         rna_array.append(tri_feature)
     return np.array(rna_array)
-def protein_to_sentence(protiens):
-    protein_array = []
-    maxlen = 472
-    for pt in protiens:
-        pt_tran = translate(pt)
-        pt_sen = proteinTokenizer(pt_tran)
-        protein_array.append(pt_sen)
-    protein_array = [[0]*(maxlen - len(pt)) + pt for pt in protein_array]
-    return np.array(protein_array)
+# def protein_to_sentence(protiens):
+#     protein_array = []
+#     maxlen = 472
+#     for pt in protiens:
+#         pt_tran = translate(pt)
+#         pt_sen = proteinTokenizer(pt_tran)
+#         protein_array.append(pt_sen)
+#     protein_array = [[0]*(maxlen - len(pt)) + pt for pt in protein_array]
+#     return np.array(protein_array)
 def matrix_mul(ip):
     return tf.linalg.matmul(ip[0],ip[1])
+
 
 def get_model():
     protein2vec = Word2Vec.load('./data/proteinModel.model')
@@ -153,16 +160,16 @@ def get_model():
     # print(embedding_rna_weights.shape,protein_embed.shape) #(4097,25) (248,343)
     # print(embedded_rna_dim,n_nucl_symbols) #25 4096
     rna_input = Input((496,),name='rna_input')
-    protein_input = Input((472,),name='protein_input')
+    protein_input = Input((2048,1,),name='protein_input')
     rnaEmbed = Embedding(input_dim=4097,output_dim=25,weights=[embedding_rna_weights],trainable=True)(rna_input)
-    proteinEmbed = Embedding(input_dim=248,output_dim=343,weights=[protein_embed],trainable=True)(protein_input)
-    conv_pro = Conv1D(filters=256,use_bias=True,kernel_size=4)(proteinEmbed)
-    conv_rna = Conv1D(filters=256,use_bias=True,kernel_size=4)(rnaEmbed)
-    pro_pool = MaxPool1D(pool_size=225,strides=5,padding='valid')(conv_pro)
+    # proteinEmbed = Embedding(input_dim=248,output_dim=343,trainable=True)(protein_input)
+    conv_pro = Conv1D(filters=512,use_bias=True,kernel_size=4)(protein_input)
+    conv_rna = Conv1D(filters=512,use_bias=True,kernel_size=4)(rnaEmbed)
+    pro_pool = MaxPool1D(pool_size=48,strides=2,padding='valid')(conv_pro)
     rna_pool = MaxPool1D(pool_size=48,strides=2,padding='valid')(conv_rna)
     conv_pro2 = Conv1D(filters=64,use_bias=True,kernel_size=4)(pro_pool)
     conv_rna2 = Conv1D(filters=64,use_bias=True,kernel_size=4)(rna_pool)
-    pro_pool2 = MaxPool1D(pool_size=46,strides=3)(conv_pro2)
+    pro_pool2 = MaxPool1D(pool_size=30,strides=3)(conv_pro2)
     rna_pool2 = MaxPool1D(pool_size=30,strides=3)(conv_rna2)
     feature_fusion = Lambda(matrix_mul)((pro_pool2,rna_pool2)) # (?,48,128) , (?,48,128)
     fully_conect = Dense(128,activation='relu',use_bias=True)(feature_fusion)
@@ -198,6 +205,7 @@ print(y.shape)
 cv = KFold(n_splits=5,shuffle=True,random_state=42)
 fold_no = 1
 metrics_per_fold = []
+show = False
 for train, test in cv.split(X,y):
     print("     ")
     print(f'Training for fold {fold_no}')
@@ -206,24 +214,48 @@ for train, test in cv.split(X,y):
     train_X = X[train]
     test_X = X[test]
     rna_train = rnaTokenizer(train_X[:,1])
-    protein_train = protein_to_sentence(train_X[:,0])
+    protein_train = (train_X[:,0])
     rna_test = rnaTokenizer(test_X[:,1])
-    protein_test = protein_to_sentence(test_X[:,0])
+    protein_test = (test_X[:,0])
     print(test_X.shape,y[test].shape)
+    print(torch.cuda.is_available())
 
-    # scaler.fit(np.array([rna_train,protein_train]))
-    # train_X = scaler.transform(np.array([rna_train,protein_train]))
-    # test_X = scaler.transform(np.array([rna_test,protein_test]))
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    # if torch.cuda.is_available():
+    #     torch.set_default_tensor_type(torch.cuda.HalfTensor)
+    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False)
 
+# Load the model
+    pretrain_model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc").to(device)
+    pretrain_model.full() if device=='cpu' else pretrain_model.half()
+    ids_train = tokenizer(list(protein_train), add_special_tokens=True, padding="longest")
+    ids_test = tokenizer(list(protein_test), add_special_tokens=True, padding="longest")
+
+    input_ids_train = torch.tensor(ids_train['input_ids']).to(device)
+    input_ids_test = torch.tensor(ids_test['input_ids']).to(device)
+    attention_mask_train = torch.tensor(ids_train['attention_mask']).to(device)
+    attention_mask_test = torch.tensor(ids_test['attention_mask']).to(device)
+    with torch.no_grad():
+        embedding_repr_train = pretrain_model(input_ids=input_ids_train, attention_mask=attention_mask_train)
+        embedding_repr_test = pretrain_model(input_ids=input_ids_test, attention_mask=attention_mask_test)
+    # print(embedding_repr.last_hidden_state.shape) #torch.Size([1622, 2, 1024])
+    emb_train = embedding_repr_train.last_hidden_state.cpu().numpy()
+    emb_test = embedding_repr_test.last_hidden_state.cpu().numpy()
+    emb_train = emb_train.reshape((emb_train.shape[0],-1))
+    emb_test = emb_test.reshape((emb_test.shape[0],-1))
+    # emb = emb.reshape((emb.shape[0],-1))
+    # print(emb.shape) #(1622, 2048)
     model = get_model()
     model.compile(loss='binary_crossentropy',optimizer='adam',metrics=['accuracy'])
-    # print(rna_train.dtype,protein_train.dtype)
+    if(not show):
+        print(model.summary())
+        show = True
 
-    history = model.fit([rna_train,protein_train],y[train],batch_size=64,epochs=20,verbose=1)
+    history = model.fit([rna_train,emb_train],y[train],batch_size=12,epochs=32,verbose=1)
 
     model.save('models/model_fold_'+str(fold_no)+".h5")
     
-    _,score = model.evaluate([rna_test,protein_test],y[test],verbose=0)
+    _,score = model.evaluate([rna_test,emb_test],y[test],verbose=0)
     metrics_per_fold.append(score)
     fold_no = fold_no + 1
 
